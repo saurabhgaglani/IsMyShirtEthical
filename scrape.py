@@ -2,14 +2,26 @@ import os
 import json
 import time
 from flask import Flask, request, jsonify
-from flask_cors import CORS  # ✅ Import CORS
+from flask_cors import CORS  
 from groq import Groq
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+from pymongo import MongoClient
+import threading
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for frontend requests
+
+
+#TO DO - Move to env variables
+MONGO_URI = "mongodb+srv://sgaglani1:Rooneymessi10@cluster0.en813.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+client = MongoClient(MONGO_URI)
+
+# Select the database and collection
+db = client["EthicalFashionDB"]  # Database Name
+collection = db["EthicalAnalysis"]  # Collection Name
+
 
 # **Step 1: Extract Page Text with Selenium**
 def scrape_clothing_info(url):
@@ -28,7 +40,7 @@ def scrape_clothing_info(url):
         driver.get(url)
         time.sleep(5)  # Allow time for content to load
 
-        # ✅ Extract all visible text
+        # Extract all visible text
         full_text = driver.execute_script("return document.body.innerText;")
         driver.quit()
 
@@ -40,7 +52,7 @@ def scrape_clothing_info(url):
 
 # **Step 2: Send Extracted Text to Groq API**
 def analyze_product_ethics(page_text):
-    api_key = "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"  # 🔒 Use environment variable for security
+    api_key = "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"  # For test use only 
     client = Groq(api_key=api_key)
 
     prompt = f"""
@@ -90,6 +102,16 @@ def analyze_product_ethics(page_text):
 
 # **Flask Endpoints**
 
+def store_in_mongo(ethics_data, url):
+    """Function to store data asynchronously in MongoDB"""
+    try:
+        ethics_data["timestamp"] = time.time()  # Add timestamp
+        ethics_data["url"] = url  # Store URL for reference
+        collection.insert_one(ethics_data)  # Insert into MongoDB
+        print("Data successfully stored in MongoDB")
+    except Exception as e:
+        print(f"MongoDB Storage Failed: {str(e)}")
+
 @app.route("/status", methods=["GET"])
 def status():
     return jsonify({"message": "API is running!"})
@@ -104,14 +126,23 @@ def analyze():
 
     print(f"Received URL: {url}")
 
-    # 1️⃣ **Extract page text**
+    # **Extract page text**
     page_text = scrape_clothing_info(url)
     if "Error" in page_text:
         return jsonify({"Error": "Scraping failed"}), 500
 
-    # 2️⃣ **Send to Groq API for Ethical Analysis**
+    # **Send to Groq API for Ethical Analysis**
     ethics_data = analyze_product_ethics(page_text)
-    return jsonify(ethics_data)
+
+    # **Return response immediately**
+    response = jsonify(ethics_data)
+
+    # **Store in MongoDB asynchronously**
+    threading.Thread(target=store_in_mongo, args=(ethics_data, url)).start()  
+
+    return response  
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
